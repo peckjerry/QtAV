@@ -1,3 +1,4 @@
+QT += sql
 ########## template for QtAV app project BEGIN ################
 greaterThan(QT_MAJOR_VERSION, 4) {
   QT += avwidgets
@@ -25,7 +26,7 @@ defineTest(genRC) {
     RC_ICONS = $$PROJECTROOT/src/QtAV.ico
     QMAKE_TARGET_COMPANY = "Shanghai University->S3 Graphics->Deepin | wbsecg1@gmail.com"
     QMAKE_TARGET_DESCRIPTION = "QtAV Multimedia framework. http://qtav.org"
-    QMAKE_TARGET_COPYRIGHT = "Copyright (C) 2012-2015 WangBin, wbsecg1@gmail.com"
+    QMAKE_TARGET_COPYRIGHT = "Copyright (C) 2012-2016 WangBin, wbsecg1@gmail.com"
     QMAKE_TARGET_PRODUCT = "QtAV $$1"
     export(RC_ICONS)
     export(QMAKE_TARGET_COMPANY)

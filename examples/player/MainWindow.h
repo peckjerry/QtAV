@@ -1,6 +1,6 @@
 /******************************************************************************
     QtAV Player Demo:  this file is part of QtAV examples
-    Copyright (C) 2012-2015 Wang Bin <wbsecg1@gmail.com>
+    Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
 *   This file is part of QtAV
 
@@ -24,8 +24,10 @@
 #include <QWidget>
 #include <QUrl>
 
+QT_BEGIN_NAMESPACE
 class QWidgetAction;
 class QToolButton;
+QT_END_NAMESPACE
 namespace QtAV {
 class AudioOutput;
 class AVError;
@@ -36,7 +38,9 @@ class LibAVFilterAudio;
 class LibAVFilterVideo;
 class SubtitleFilter;
 class VideoPreviewWidget;
+class DynamicShaderObject;
 }
+QT_BEGIN_NAMESPACE
 class QMenu;
 class QTimeEdit;
 class QVBoxLayout;
@@ -44,6 +48,7 @@ class QLabel;
 class QPushButton;
 class QSpinBox;
 class QTimeEdit;
+QT_END_NAMESPACE
 class Button;
 class Slider;
 class PlayList;
@@ -97,7 +102,9 @@ private slots:
     void onStopPlay();
     void onPaused(bool p);
     void onSpeedChange(qreal speed);
+    void setFrameRate();
     void seek();
+    void seek(int);
     void showHideVolumeBar();
     void setVolume();
     void tryHideControlBar();
@@ -125,6 +132,8 @@ private slots:
     void onAVFilterAudioConfigChanged();
     void onBufferValueChanged();
     void onAbortOnTimeoutChanged();
+
+    void onUserShaderChanged();
 
     void donate();
     void setup();
@@ -203,6 +212,7 @@ private:
     OSDFilter *mpOSD;
     QtAV::SubtitleFilter *mpSubtitle;
     QtAV::VideoPreviewWidget *m_preview;
+    QtAV::DynamicShaderObject *m_shader;
 };
 
 

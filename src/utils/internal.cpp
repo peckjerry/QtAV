@@ -1,8 +1,8 @@
 /******************************************************************************
-    QtAV:  Media play library based on Qt and FFmpeg
-    Copyright (C) 2015 Wang Bin <wbsecg1@gmail.com>
+    QtAV:  Multimedia framework based on Qt and FFmpeg
+    Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
-*   This file is part of QtAV
+*   This file is part of QtAV (from 2015)
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Lesser General Public
@@ -25,13 +25,60 @@
 #else
 #include <QtCore/QStandardPaths>
 #endif
+#ifdef Q_OS_MAC
+#include <CoreFoundation/CoreFoundation.h>
+#endif
 #include "QtAV/private/AVCompat.h"
 #include "utils/Logger.h"
-namespace QtAV {
 
+namespace QtAV {
 static const char kFileScheme[] = "file:";
 #define CHAR_COUNT(s) (sizeof(s) - 1) // tail '\0'
 
+#ifdef Q_OS_MAC
+static QString fromCFString(CFStringRef string)
+{
+#if QT_VERSION >= QT_VERSION_CHECK(5, 2, 0)
+    return QString().fromCFString(string);
+#else
+    if (!string)
+        return QString();
+    CFIndex length = CFStringGetLength(string);
+    // Fast path: CFStringGetCharactersPtr does not copy but may return null for any and no reason.
+    const UniChar *chars = CFStringGetCharactersPtr(string);
+    if (chars)
+        return QString(reinterpret_cast<const QChar *>(chars), length);
+    QString ret(length, Qt::Uninitialized);
+    CFStringGetCharacters(string, CFRangeMake(0, length), reinterpret_cast<UniChar *>(ret.data()));
+    return ret;
+#endif
+}
+
+QString absolutePathFromOSX(const QString& s)
+{
+    QString result;
+#if !(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1060)
+    CFStringRef cfStr = CFStringCreateWithCString(kCFAllocatorDefault, s.toUtf8().constData(),  kCFStringEncodingUTF8);
+    if (cfStr) {
+        CFURLRef cfUrl = CFURLCreateWithString(kCFAllocatorDefault, cfStr, NULL);
+        if (cfUrl) {
+            CFErrorRef error = 0;
+            CFURLRef cfUrlAbs = CFURLCreateFilePathURL(kCFAllocatorDefault, cfUrl, &error);
+            if (cfUrlAbs) {
+                CFStringRef cfStrAbsUrl = CFURLGetString(cfUrlAbs);
+                result = fromCFString(cfStrAbsUrl);
+                CFRelease(cfUrlAbs);
+            }
+            CFRelease(cfUrl);
+        }
+        CFRelease(cfStr);
+    }
+#else
+    Q_UNUSED(s);
+#endif
+    return result;
+}
+#endif //Q_OS_MAC
 /*!
  * \brief getLocalPath
  * get path that works for both ffmpeg and QFile
@@ -41,6 +88,10 @@ static const char kFileScheme[] = "file:";
  */
 QString getLocalPath(const QString& fullPath)
 {
+#ifdef Q_OS_MAC
+    if (fullPath.startsWith(QLatin1String("file:///.file/id=")) || fullPath.startsWith(QLatin1String("/.file/id=")))
+        return absolutePathFromOSX(fullPath);
+#endif
     int pos = fullPath.indexOf(QLatin1String(kFileScheme));
     if (pos >= 0) {
         pos += CHAR_COUNT(kFileScheme);
@@ -63,9 +114,12 @@ QString getLocalPath(const QString& fullPath)
 #undef CHAR_COUNT
 
 namespace Internal {
-
-
 namespace Path {
+
+QString toLocal(const QString &fullPath)
+{
+    return getLocalPath(fullPath);
+}
 
 QString appDataDir()
 {
@@ -104,6 +158,7 @@ QString fontsDir()
 
 QString options2StringHelper(void* obj, const char* unit)
 {
+    qDebug("obj: %p", obj);
     QString s;
     const AVOption* opt = NULL;
     while ((opt = av_opt_next(obj, opt))) {
@@ -169,15 +224,15 @@ void setOptionsToFFmpegObj(const QVariant& opt, void* obj)
             const QVariant::Type vt = i.value().type();
             if (vt == QVariant::Map)
                 continue;
-            const QByteArray key(i.key().toLower().toUtf8());
+            const QByteArray key(i.key().toUtf8());
             qDebug("%s=>%s", i.key().toUtf8().constData(), i.value().toByteArray().constData());
             if (vt == QVariant::Int || vt == QVariant::UInt || vt == QVariant::Bool) {
                 // QVariant.toByteArray(): "true" or "false", can not recognized by avcodec
-                av_opt_set_int(obj, key.constData(), i.value().toInt(), 0);
+                av_opt_set_int(obj, key.constData(), i.value().toInt(), AV_OPT_SEARCH_CHILDREN);
             } else if (vt == QVariant::LongLong || vt == QVariant::ULongLong) {
-                av_opt_set_int(obj, key.constData(), i.value().toLongLong(), 0);
+                av_opt_set_int(obj, key.constData(), i.value().toLongLong(), AV_OPT_SEARCH_CHILDREN);
             } else if (vt == QVariant::Double) {
-                av_opt_set_double(obj, key.constData(), i.value().toDouble(), 0);
+                av_opt_set_double(obj, key.constData(), i.value().toDouble(), AV_OPT_SEARCH_CHILDREN);
             }
         }
         return;
@@ -191,16 +246,16 @@ void setOptionsToFFmpegObj(const QVariant& opt, void* obj)
         const QVariant::Type vt = i.value().type();
         if (vt == QVariant::Hash)
             continue;
-        const QByteArray key(i.key().toLower().toUtf8());
+        const QByteArray key(i.key().toUtf8());
         qDebug("%s=>%s", i.key().toUtf8().constData(), i.value().toByteArray().constData());
         if (vt == QVariant::Int || vt == QVariant::UInt || vt == QVariant::Bool) {
-            av_opt_set_int(obj, key.constData(), i.value().toInt(), 0);
+            av_opt_set_int(obj, key.constData(), i.value().toInt(), AV_OPT_SEARCH_CHILDREN);
         } else if (vt == QVariant::LongLong || vt == QVariant::ULongLong) {
-            av_opt_set_int(obj, key.constData(), i.value().toLongLong(), 0);
+            av_opt_set_int(obj, key.constData(), i.value().toLongLong(), AV_OPT_SEARCH_CHILDREN);
         }
     }
 }
-
+//FIXME: why to lower case?
 void setOptionsToDict(const QVariant& opt, AVDictionary** dict)
 {
     if (!opt.isValid())
@@ -215,7 +270,7 @@ void setOptionsToDict(const QVariant& opt, AVDictionary** dict)
             const QVariant::Type vt = i.value().type();
             if (vt == QVariant::Map)
                 continue;
-            const QByteArray key(i.key().toLower().toUtf8());
+            const QByteArray key(i.key().toUtf8());
             switch (vt) {
             case QVariant::Bool: {
                 // QVariant.toByteArray(): "true" or "false", can not recognized by avcodec
@@ -224,7 +279,7 @@ void setOptionsToDict(const QVariant& opt, AVDictionary** dict)
                 break;
             default:
                 // key and value are in lower case
-                av_dict_set(dict, i.key().toLower().toUtf8().constData(), i.value().toByteArray().toLower().constData(), 0);
+                av_dict_set(dict, i.key().toUtf8().constData(), i.value().toByteArray().constData(), 0);
                 break;
             }
             qDebug("dict: %s=>%s", i.key().toUtf8().constData(), i.value().toByteArray().constData());
@@ -240,7 +295,7 @@ void setOptionsToDict(const QVariant& opt, AVDictionary** dict)
         const QVariant::Type vt = i.value().type();
         if (vt == QVariant::Hash)
             continue;
-        const QByteArray key(i.key().toLower().toUtf8());
+        const QByteArray key(i.key().toUtf8());
         switch (vt) {
         case QVariant::Bool: {
             // QVariant.toByteArray(): "true" or "false", can not recognized by avcodec
@@ -249,7 +304,7 @@ void setOptionsToDict(const QVariant& opt, AVDictionary** dict)
             break;
         default:
             // key and value are in lower case
-            av_dict_set(dict, i.key().toLower().toUtf8().constData(), i.value().toByteArray().toLower().constData(), 0);
+            av_dict_set(dict, i.key().toUtf8().constData(), i.value().toByteArray().constData(), 0);
             break;
         }
         qDebug("dict: %s=>%s", i.key().toUtf8().constData(), i.value().toByteArray().constData());
@@ -288,6 +343,5 @@ void setOptionsForQObject(const QVariant& opt, QObject *obj)
         qDebug("%s=>%s", i.key().toUtf8().constData(), i.value().toByteArray().constData());
     }
 }
-
 } //namespace Internal
 } //namespace QtAV

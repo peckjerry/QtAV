@@ -1,5 +1,5 @@
 /******************************************************************************
-    QtAV:  Media play library based on Qt and FFmpeg
+    QtAV:  Multimedia framework based on Qt and FFmpeg
     Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
 *   This file is part of QtAV
@@ -212,42 +212,23 @@ bool VideoThread::deliverVideoFrame(VideoFrame &frame)
      */
     d.outputSet->lock();
     QList<AVOutput *> outputs = d.outputSet->outputs();
-    if (outputs.size() > 1) { //FIXME!
-        VideoFrame outFrame(d.conv.convert(frame, VideoFormat::Format_RGB32));
+    VideoRenderer *vo = 0;
+    if (!outputs.isEmpty())
+        vo = static_cast<VideoRenderer*>(outputs.first());
+    if (vo && (!vo->isSupported(frame.pixelFormat())
+            || (vo->isPreferredPixelFormatForced() && vo->preferredPixelFormat() != frame.pixelFormat())
+            )) {
+        VideoFrame outFrame(d.conv.convert(frame, vo->preferredPixelFormat()));
         if (!outFrame.isValid()) {
-            /*
-             * use VideoFormat::Format_User to deliver user defined frame
-             * renderer may update background but no frame to graw, so flickers
-             * may crash for some renderer(e.g. d2d) without validate and render an invalid frame
-             */
             d.outputSet->unlock();
             return false;
         }
         frame = outFrame;
-    } else {
-        VideoRenderer *vo = 0;
-        if (!outputs.isEmpty())
-            vo = static_cast<VideoRenderer*>(outputs.first());
-        if (vo && (!vo->isSupported(frame.pixelFormat())
-                || (vo->isPreferredPixelFormatForced() && vo->preferredPixelFormat() != frame.pixelFormat())
-                )) {
-            VideoFrame outFrame(d.conv.convert(frame, vo->preferredPixelFormat()));
-            if (!outFrame.isValid()) {
-                /*
-                 * use VideoFormat::Format_User to deliver user defined frame
-                 * renderer may update background but no frame to graw, so flickers
-                 * may crash for some renderer(e.g. d2d) without validate and render an invalid frame
-                 */
-                d.outputSet->unlock();
-                return false;
-            }
-            frame = outFrame;
-        }
     }
     d.outputSet->sendVideoFrame(frame); //TODO: group by format, convert group by group
     d.outputSet->unlock();
 
-    emit frameDelivered();
+    Q_EMIT frameDelivered();
     return true;
 }
 
@@ -291,15 +272,17 @@ void VideoThread::run()
     const char* pkt_data = NULL; // workaround for libav9 decode fail but error code >= 0
     qint64 last_deliver_time = 0;
     int sync_id = 0;
-    while (true) {
+    while (!d.stop) {
         processNextTask();
         //TODO: why put it at the end of loop then stepForward() not work?
         //processNextTask tryPause(timeout) and  and continue outter loop
-        if (tryPause()) { //DO NOT continue, or stepForward() will fail
+        if (d.render_pts0 < 0) { // no pause when seeking
+            if (tryPause()) { //DO NOT continue, or stepForward() will fail
 
-        } else {
-            if (isPaused())
-                continue; //timeout. process pending tasks
+            } else {
+                if (isPaused())
+                    continue; //timeout. process pending tasks
+            }
         }
         if (d.seek_requested) {
             d.seek_requested = false;
@@ -327,8 +310,6 @@ void VideoThread::run()
             wait_key_frame = false;
             qDebug("video thread gets an eof packet.");
         } else {
-            if (d.stop) // user stop
-                break;
             //qDebug() << pkt.position << " pts:" <<pkt.pts;
             //Compare to the clock
             if (!pkt.isValid()) {
@@ -338,19 +319,20 @@ void VideoThread::run()
                 d.dec->flush(); //d.dec instead of dec because d.dec maybe changed in processNextTask() but dec is not
                 d.render_pts0 = pkt.pts;
                 sync_id = pkt.position;
-                qDebug("video seek: %.3f, id: %d", d.render_pts0, sync_id);
+                if (pkt.pts >= 0)
+                    qDebug("video seek: %.3f, id: %d", d.render_pts0, sync_id);
                 d.pts_history = ring<qreal>(d.pts_history.capacity());
                 v_a = 0;
                 continue;
             }
         }
-        if (pkt.pts <= 0) {
+        if (pkt.pts <= 0 && !pkt.isEOF() && pkt.data.size() > 0) {
             nb_no_pts++;
         } else {
             nb_no_pts = 0;
         }
         if (nb_no_pts > 5) {
-            qDebug("the stream may have no pts. force fps to: %f", d.force_fps < 0 ? -d.force_fps : 24);
+            qDebug("the stream may have no pts. force fps to: %f/%f", d.force_fps < 0 ? -d.force_fps : 24, d.force_fps);
             d.clock->setClockAuto(false);
             d.clock->setClockType(AVClock::VideoClock);
             if (d.force_fps < 0)
@@ -406,7 +388,7 @@ void VideoThread::run()
                 }
             }
         } else {
-            if (nb_dec_slow > kNbSlowFrameDrop) {
+            if (nb_dec_slow >= kNbSlowFrameDrop) {
                 qDebug("decrease 1 slow frame: %d", nb_dec_slow);
                 nb_dec_slow = qMax(0, nb_dec_slow-1); // nb_dec_slow < kNbSlowFrameDrop will reset decoder frame drop flag
             }
@@ -462,22 +444,24 @@ void VideoThread::run()
             wait_key_frame = false;
         }
         QVariantHash *dec_opt_old = dec_opt;
-        if (!seeking || d.render_pts0 < 0.001) { // MAYBE not seeking
+        if (!seeking || pkt.pts - d.render_pts0 >= -0.05) { // MAYBE not seeking. We should not drop the frames near the seek target. FIXME: use packet pts distance instead of -0.05 (20fps)
+            if (seeking)
+                qDebug("seeking... pkt.pts - d.render_pts0: %.3f", pkt.pts - d.render_pts0);
             if (nb_dec_slow < kNbSlowFrameDrop) {
                 if (dec_opt == &d.dec_opt_framedrop) {
-                    qDebug("frame drop normal. nb_dec_slow: %d. not seeking", nb_dec_slow);
+                    qDebug("frame drop=>normal. nb_dec_slow: %d", nb_dec_slow);
                     dec_opt = &d.dec_opt_normal;
                 }
             } else {
                 if (dec_opt == &d.dec_opt_normal) {
-                    qDebug("frame drop noref. nb_dec_slow: %d too slow. not seeking", nb_dec_slow);
+                    qDebug("frame drop=>noref. nb_dec_slow: %d too slow", nb_dec_slow);
                     dec_opt = &d.dec_opt_framedrop;
                 }
             }
         } else { // seeking
             if (seek_count > 0 && d.drop_frame_seek) {
                 if (dec_opt == &d.dec_opt_normal) {
-                    qDebug("seeking... frame drop noref. nb_dec_slow: %d", nb_dec_slow);
+                    qDebug("seeking... pkt.pts - d.render_pts0: %.3f, frame drop=>noref. nb_dec_slow: %d", pkt.pts - d.render_pts0, nb_dec_slow);
                     dec_opt = &d.dec_opt_framedrop;
                 }
             } else {
@@ -522,7 +506,7 @@ void VideoThread::run()
         }
         // reduce here to ensure to decode the rest data in the next loop
         if (!pkt.isEOF())
-            pkt.data = QByteArray::fromRawData(pkt.data.constData() + pkt.data.size() - dec->undecodedSize(), dec->undecodedSize());
+            pkt.skip(pkt.data.size() - dec->undecodedSize());
         VideoFrame frame = dec->frame();
         if (!frame.isValid()) {
             qWarning("invalid video frame from decoder. undecoded data size: %d", pkt.data.size());
@@ -597,6 +581,7 @@ void VideoThread::run()
         // no return even if d.stop is true. ensure frame is displayed. otherwise playing an image may be failed to display
         if (!deliverVideoFrame(frame))
             continue;
+        //qDebug("clock.diff: %.3f", d.clock->diff());
         if (d.force_dt > 0)
             last_deliver_time = QDateTime::currentMSecsSinceEpoch();
         // TODO: store original frame. now the frame is filtered and maybe converted to renderer perferred format

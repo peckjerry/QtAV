@@ -1,6 +1,6 @@
 /******************************************************************************
     QtAV:  Media play library based on Qt and FFmpeg
-    Copyright (C) 2012-2014 Wang Bin <wbsecg1@gmail.com>
+    Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
     
 *   This file is part of QtAV
 
@@ -28,7 +28,9 @@
 #include <QtCore/QWaitCondition>
 
 //TODO: block full and empty condition separately
+QT_BEGIN_NAMESPACE
 template<typename T> class QQueue;
+QT_END_NAMESPACE
 namespace QtAV {
 
 template <typename T, template <typename> class Container = QQueue>
@@ -146,7 +148,7 @@ void BlockingQueue<T, Container>::put(const T& t)
     queue.enqueue(t);
     onPut(t); // emit bufferProgressChanged here if buffering
     if (checkEnough()) {
-        cond_empty.wakeAll(); //emit buffering finished here
+        cond_empty.wakeOne(); //emit buffering finished here
         //qDebug("queue is enough: %d/%d~%d", queue.size(), thres, cap);
     } else {
         //qDebug("buffering: %d/%d~%d", queue.size(), thres, cap);
@@ -174,8 +176,7 @@ T BlockingQueue<T, Container>::take()
         return T();
     }
     T t(queue.dequeue());
-    if (!checkEnough())
-        cond_full.wakeAll();
+    cond_full.wakeOne();
     onTake(t); // emit start buffering here if empty
     return t;
 }

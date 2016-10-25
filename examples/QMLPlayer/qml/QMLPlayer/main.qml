@@ -1,8 +1,8 @@
 /******************************************************************************
-    QtAV:  Media play library based on Qt and FFmpeg
-    Copyright (C) 2013-2016 Wang Bin <wbsecg1@gmail.com>
+    QtAV:  Multimedia framework based on Qt and FFmpeg
+    Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
-*   This file is part of QtAV
+*   This file is part of QtAV (from 2013)
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Lesser General Public
@@ -18,11 +18,16 @@
     License along with this library; if not, write to the Free Software
     Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 ******************************************************************************/
-
+//if qt<5.3, remove lines: sed '/\/\/IF_QT53/,/\/\/ENDIF_QT53/d'
 import QtQuick 2.0
-import QtQuick.Dialogs 1.0
+//IF_QT53
+import QtQuick.Dialogs 1.2
+/*
+//ENDIF_QT53
+import QtQuick.Dialogs 1.1 /*
+*/
 //import QtMultimedia 5.0
-import QtAV 1.6
+import QtAV 1.7
 import QtQuick.Window 2.1
 import "utils.js" as Utils
 
@@ -40,6 +45,21 @@ Rectangle {
         console.log("init>>>>>screen density logical: " + Screen.logicalPixelDensity + " pixel: " + Screen.pixelDensity);
     }
 
+    VideoFilter {
+        id: negate
+        type: VideoFilter.GLSLFilter
+        shader: Shader {
+            postProcess: "gl_FragColor.rgb = vec3(1.0-gl_FragColor.r, 1.0-gl_FragColor.g, 1.0-gl_FragColor.b);"
+        }
+    }
+    VideoFilter {
+        id: hflip
+        type: VideoFilter.GLSLFilter
+        shader: Shader {
+            sample: "vec4 sample2d(sampler2D tex, vec2 pos, int p) { return texture(tex, vec2(1.0-pos.x, pos.y));}"
+        }
+    }
+
     VideoOutput2 {
         id: videoOut
         opengl: true
@@ -47,6 +67,8 @@ Rectangle {
         anchors.fill: parent
         source: player
         orientation: 0
+        property real zoom: 1
+        //filters: [negate, hflip]
         SubtitleItem {
             id: subtitleItem
             fillMode: videoOut.fillMode
@@ -65,7 +87,7 @@ Rectangle {
             color: PlayerConfig.subtitleColor
             anchors.fill: parent
             anchors.bottomMargin: PlayerConfig.subtitleBottomMargin
-        }    
+        }
     }
 
     MediaPlayer {
@@ -83,6 +105,8 @@ Rectangle {
             }
         }
         onSourceChanged: {
+            videoOut.zoom = 1
+            videoOut.regionOfInterest = Qt.rect(0, 0, 0, 0)
             msg.info("url: " + source)
         }
 
@@ -199,6 +223,7 @@ Rectangle {
             if (ml < 2.0 || 5*ml < ML)
                 return
             if (t > -1 && t < 1) {
+                player.fastSeek = true
                 if (dx > 0) {
                     player.seekForward()
                 } else {
@@ -209,14 +234,62 @@ Rectangle {
         MouseArea {
             anchors.fill: parent
             hoverEnabled: true
+            cursorShape: control.opacity > 0 || cursor_timer.running ? Qt.ArrowCursor : Qt.BlankCursor
+            onWheel: {
+                var deg = wheel.angleDelta.y/8
+                var dp = wheel.pixelDelta
+                var p = Qt.point(mouseX, mouseY) //root.mapToItem(videoOut, Qt.point(mouseX, mouseY))
+                var fp = videoOut.mapPointToSource(p)
+                if (fp.x < 0)
+                    fp.x = 0;
+                if (fp.y < 0)
+                    fp.y = 0;
+                if (fp.x > videoOut.videoFrameSize.width)
+                    fp.x = videoOut.videoFrameSize.width
+                if (fp.y > videoOut.videoFrameSize.height)
+                    fp.y = videoOut.videoFrameSize.height
+                videoOut.zoom *= (1.0 + deg*3.14/180.0);
+                if (videoOut.zoom < 1.0)
+                    videoOut.zoom = 1.0
+                var x0 = fp.x - fp.x/videoOut.zoom;
+                var y0 = fp.y - fp.y/videoOut.zoom;
+                // in fact, it must insected with video frame rect. opengl save us
+                videoOut.regionOfInterest.x = x0
+                videoOut.regionOfInterest.y = y0
+                videoOut.regionOfInterest.width = videoOut.videoFrameSize.width/videoOut.zoom
+                videoOut.regionOfInterest.height = videoOut.videoFrameSize.height/videoOut.zoom
+            }
+
             onDoubleClicked: {
                 control.toggleVisible()
             }
+            onClicked: {
+                if (playList.state === "show")
+                    return
+                if (playList.state === "hide")
+                    playList.state = "ready"
+                else
+                    playList.state = "hide"
+
+            }
+
             onMouseXChanged: {
-                if (root.width - mouseX < configPanel.width) {
+                cursor_timer.start()
+                if (mouseX > root.width || mouseX < 0
+                        || mouseY > root.height || mouseY < 0)
+                    return;
+                if (mouseX < Utils.scaled(20)) {
+                    if (playList.state === "hide") {
+                        playList.state = "ready"
+                    }
+                }
+
+                if (root.width - mouseX < configPanel.width) { //qt5.6 mouseX is very large if mouse released
+                    //console.log("configPanel show: root width: " + root.width + " mouseX: " + mouseX + "panel width: " + configPanel.width)
                     configPanel.state = "show"
                 } else {
                     configPanel.state = "hide"
+                    //console.log("configPanel hide: root width: " + root.width + " mouseX: " + mouseX + "panel width: " + configPanel.width)
                 }
                 if (player.playbackState == MediaPlayer.StoppedState || !player.hasVideo)
                     return;
@@ -227,6 +300,10 @@ Rectangle {
                         control.showPreview(mouseX/parent.width)
                     }
                 }
+            }
+            Timer {
+                id: cursor_timer
+                interval: 2000
             }
         }
     }
@@ -347,10 +424,12 @@ Rectangle {
     Item {
         id: configPage
         anchors.right: configPanel.left
+        anchors.rightMargin: -configPanel.anchors.rightMargin*Utils.scaled(20)/configPanel.width
         //anchors.bottom: control.top
         y: Math.max(0, Math.min(configPanel.selectedY, root.height - pageLoader.height - control.height))
-        width: parent.width < 4*configPanel.width ? parent.width - configPanel.width : parent.width/2 + configPanel.width
-        height: Utils.scaled(200)
+        width: parent.width < 4*configPanel.width ? parent.width - configPanel.width : parent.width/2 + configPanel.width -16
+       // height: maxHeight
+        readonly property real maxHeight: control.y //- Math.max(0, configPanel.selectedY)
         Loader {
             id: pageLoader
             anchors.right: parent.right
@@ -359,6 +438,7 @@ Rectangle {
             onLoaded: {
                 if (!item)
                     return
+                item.maxHeight = configPage.maxHeight
                 if (item.information) {
                     item.information = {
                         source: player.source,
@@ -382,21 +462,15 @@ Rectangle {
                     pageLoader.source = ""
             }
             onChannelChanged: player.channelLayout = channel
-            onSubtitleChanged: subtitle.file = file
             onExternalAudioChanged: player.externalAudio = file
             onAudioTrackChanged: player.audioTrack = track
             onSubtitleTrackChanged: player.internalSubtitleTrack = track
-            onZeroCopyChanged: {
-                var opt = player.videoCodecOptions
-                if (value) {
-                    opt["copyMode"] = "ZeroCopy"
-                } else {
-                    if (Qt.platform.os == "osx")
-                        opt["copyMode"] = "LazyCopy"
-                    else
-                        opt["copyMode"] = "OptimizedCopy"
-                }
-                player.videoCodecOptions = opt
+            onBrightnessChanged: videoOut.brightness = target.brightness
+            onContrastChanged: videoOut.contrast = target.contrast
+            onHueChanged: videoOut.hue = target.hue
+            onSaturationChanged: {
+                console.log("saturation: " + target.saturation)
+                videoOut.saturation = target.saturation
             }
         }
     }
@@ -407,42 +481,45 @@ Rectangle {
             right: parent.right
             bottom: control.top
         }
-        width: Utils.scaled(140)
+        width: Utils.scaled(100)
         onClicked: {
             pageLoader.source = selectedUrl
             if (pageLoader.item)
                 pageLoader.item.visible = true
         }
         onSelectedUrlChanged: pageLoader.source = selectedUrl
-        states: [
-            State {
-                name: "show"
-                PropertyChanges {
-                    target: configPanel
-                    opacity: 0.9
-                    anchors.rightMargin: 0
-                }
-            },
-            State {
-                name: "hide"
-                PropertyChanges {
-                    target: configPanel
-                    opacity: 0
-                    anchors.rightMargin: -configPanel.width
-                }
-            }
-        ]
-        transitions: [
-            Transition {
-                from: "*"; to: "*"
-                PropertyAnimation {
-                    properties: "opacity,anchors.rightMargin"
-                    easing.type: Easing.OutQuart
-                    duration: 500
-                }
-            }
-        ]
     }
+
+    PlayListPanel {
+        id: playList
+        visible: Qt.platform.os !== "winrt"
+        anchors {
+            top: parent.top
+            left: parent.left
+            bottom: control.top
+        }
+        width: Math.min(parent.width, Utils.scaled(480)) - Utils.scaled(20)
+        Connections {
+            target: player
+            // onStatusChanged: too late to call status is wrong value
+            onDurationChanged: {
+                if (player.duration <= 0)
+                    return
+                var url = player.source.toString()
+                if (url.startsWith("winrt:@")) {
+                    url = url.substring(url.indexOf(":", 7) + 1);
+                }
+                console.log("duration changed: " + url)
+                playList.addHistory(url, player.duration)
+            }
+        }
+        onPlay: {
+            player.source = source
+            if (start > 0)
+                player.seek(start)
+        }
+    }
+
     ControlPanel {
         id: control
         anchors {
@@ -477,24 +554,72 @@ Rectangle {
         }
         volume: player.volume
         onOpenFile: fileDialog.open()
+        //IF_QT53
+        onOpenUrl: urlDialog.open()
+        //ENDIF_QT53
         onShowInfo: pageLoader.source = "MediaInfoPage.qml"
         onShowHelp: pageLoader.source = "About.qml"
     }
+//IF_QT53
+    Dialog {
+        id: urlDialog
+        standardButtons: StandardButton.Open | StandardButton.Cancel
+        title: qsTr("Open a URL")
+        Rectangle {
+            color: "black"
+            anchors.top: parent.top
+            height: Utils.kItemHeight
+            width: parent.width
+            TextInput {
+                id: urlEdit
+                color: "orange"
+                font.pixelSize: Utils.kFontSize
+                anchors.fill: parent
+            }
+        }
+        onAccepted: player.source = urlEdit.displayText
+    }
+//ENDIF_QT53
     FileDialog {
         id: fileDialog
         title: "Please choose a media file"
+        selectMultiple: true
         folder: PlayerConfig.lastFile
         onAccepted: {
-            PlayerConfig.lastFile = fileUrl.toString()
-            player.source = fileDialog.fileUrl
-            //player.stop() //remove this if autoLoad works
-            //player.play()
+            var sub, av
+            for (var i = 0; i < fileUrls.length; ++i) {
+                var s = fileUrls[i].toString()
+                if (s.endsWith(".srt")
+                        || s.endsWith(".ass")
+                        || s.endsWith(".ssa")
+                        || s.endsWith(".sub")
+                        || s.endsWith(".idx") //vob
+                        || s.endsWith(".mpl2")
+                        || s.endsWith(".smi")
+                        || s.endsWith(".sami")
+                        || s.endsWith(".sup")
+                        || s.endsWith(".txt"))
+                    sub = fileUrls[i]
+                else
+                    av = fileUrls[i]
+            }
+            if (sub) {
+                subtitle.autoLoad = false
+                subtitle.file = sub
+            } else {
+                subtitle.autoLoad = PlayerConfig.subtitleAutoLoad
+                subtitle.file = ""
+            }
+            if (av) {
+                player.source = av
+                PlayerConfig.lastFile = av
+            }
         }
     }
     Connections {
         target: Qt.application
         onStateChanged: { //since 5.1
-            if (Qt.platform.os !== "android")
+            if (Qt.platform.os === "winrt" || Qt.platform.os === "winphone") //paused by system
                 return
             // winrt is handled by system
             switch (Qt.application.state) {
@@ -505,6 +630,18 @@ Rectangle {
             default:
                 break
             }
+        }
+    }
+    Connections {
+        target: PlayerConfig
+        onZeroCopyChanged: {
+            var opt = player.videoCodecOptions
+            if (PlayerConfig.zeroCopy) {
+                opt["copyMode"] = "ZeroCopy"
+            } else {
+                opt["copyMode"] = "OptimizedCopy" //FIXME: CUDA
+            }
+            player.videoCodecOptions = opt
         }
     }
 }

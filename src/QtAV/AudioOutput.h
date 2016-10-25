@@ -1,5 +1,5 @@
 /******************************************************************************
-    QtAV:  Media play library based on Qt and FFmpeg
+    QtAV:  Multimedia framework based on Qt and FFmpeg
     Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
 *   This file is part of QtAV
@@ -55,18 +55,20 @@ class Q_AV_EXPORT AudioOutput : public QObject, public AVOutput
 public:
     /*!
      * \brief DeviceFeature Feature enum
-     * features supported by the audio playback api (we call device or backend here)
+     * Features supported by the audio playback api (we call device or backend here)
+     * If a feature is not supported, e.g. SetVolume, then a software implemention is used.
      */
     enum DeviceFeature {
         NoFeature = 0,
-        SetVolume = 1, /// NOT IMPLEMENTED. Use backend volume control api rather than software scale. Ignore if backend does not support.
-        SetMute = 1 << 1, /// NOT IMPLEMENTED
+        SetVolume = 1, /// Use backend volume control api rather than software scale. Ignore if backend does not support.
+        SetMute = 1 << 1,
         SetSampleRate = 1 << 2, /// NOT IMPLEMENTED
+        SetSpeed = 1 << 3,  /// NOT IMPLEMENTED
     };
     Q_DECLARE_FLAGS(DeviceFeatures, DeviceFeature)
     /*!
      * \brief backendsAvailable
-     * All registered backends
+     * All registered backends in default priority order
      * \return
      */
     static QStringList backendsAvailable();
@@ -75,7 +77,7 @@ public:
      * Audio format set to preferred sample format and channel layout
      */
     AudioOutput(QObject *parent = 0);
-    virtual ~AudioOutput();
+    ~AudioOutput();
     /*!
      * \brief setBackends
      * set the given backends. Old backend instance and backend() is updated soon if backendsChanged.
@@ -88,8 +90,17 @@ public:
      * backend name currently in use
      */
     QString backend() const;
-    bool drain();
-    void reset(); //drain and set audio time 0
+    /*!
+     * \brief flush
+     * Play the buffered audio data
+     * \return
+     */
+    void flush();
+    /*!
+     * \brief clear
+     * Clear audio buffers and set time to 0. The default behavior is flush and reset time
+     */
+    void clear();
     bool open();
     bool close();
     bool isOpen() const;
@@ -99,17 +110,29 @@ public:
      * for async playback backend, or until the data is completely played for blocking playback backend.
      * \param data Audio data to play
      * \param pts Timestamp for this data. Useful if need A/V sync. Ignore it if only play audio
-     * \return true if play successfully
+     * \return false if currently isPaused(), no backend is available or backend failed to play
      */
     bool play(const QByteArray& data, qreal pts = 0.0);
-    void setAudioFormat(const AudioFormat& format);
-    AudioFormat& audioFormat();
+    /*!
+     * \brief pause
+     * Pause audio rendering. play() will fail.
+     */
+    void pause(bool value);
+    bool isPaused() const;
+    /*!
+     * \brief setAudioFormat
+     * Set/Request to use the given \l format. If it's not supported, an preferred format will be used.
+     * \param format requested format
+     * \return actual format to use. Invalid format if backend is not available
+     * NOTE: Check format support may fail for some backends (OpenAL) if it's closed.
+     */
+    AudioFormat setAudioFormat(const AudioFormat& format);
+    const AudioFormat& requestedFormat() const;
+    /*!
+     * \brief audioFormat
+     * \return actual format for requested format
+     */
     const AudioFormat& audioFormat() const;
-
-    void setSampleRate(int rate); //deprecated
-    int sampleRate() const; //deprecated
-    void setChannels(int channels); //deprecated
-    int channels() const; //deprecated
     /*!
      * \brief setVolume
      * Set volume level.
@@ -142,31 +165,24 @@ public:
      *  check \a isSupported(format.sampleFormat()) and \a isSupported(format.channelLayout())
      * \param format
      * \return true if \a format is supported. default is true
+     * NOTE: may fail for some backends if it's closed, for example OpenAL
      */
     bool isSupported(const AudioFormat& format) const;
-    bool isSupported(AudioFormat::SampleFormat sampleFormat) const;
-    bool isSupported(AudioFormat::ChannelLayout channelLayout) const;
-    /*!
-     * \brief preferredSampleFormat
-     * \return the preferred sample format. default is signed16 packed
-     *  If the specified format is not supported, resample to preffered format
-     */
-    AudioFormat::SampleFormat preferredSampleFormat() const;
-    /*!
-     * \brief preferredChannelLayout
-     * \return the preferred channel layout. default is stereo
-     */
-    AudioFormat::ChannelLayout preferredChannelLayout() const;
-
-    int bufferSize() const; /// bufferSamples()*bytesPerSample
-    QTAV_DEPRECATED void setBufferSize(int value); /// The same as setBufferSamples
     /*!
      * \brief bufferSamples
-     * number of samples that audio output accept in 1 buffer. feed the audio output this size of data every time
+     * Number of samples that audio output accept in 1 buffer. Feed the audio output this size of data every time.
+     * Smaller buffer samples gives more buffers for a given data to avoid stutter. But if it's too small, the duration of 1 buffer will be too small to play, for example 1ms. Currently the default value is 512.
+     * Some backends(OpenAL) are affected significantly by this property
      */
     int bufferSamples() const;
     void setBufferSamples(int value);
-    // for internal use
+    int bufferSize() const; /// bufferSamples()*bytesPerSample
+    /*!
+     * \brief bufferCount
+     * Total buffer count. If it's not large enough, playing high sample rate audio may be poor.
+     * The default value is 16. TODO: depending on audio format(sample rate?)
+     * Some backends(OpenAL) are affected significantly by this property
+     */
     int bufferCount() const;
     void setBufferCount(int value);
     int bufferSizeTotal() const { return bufferCount() * bufferSize();}
@@ -188,7 +204,7 @@ public:
     DeviceFeatures supportedDeviceFeatures() const;
     qreal timestamp() const;
     // timestamp of current playing data
-signals:
+Q_SIGNALS:
     void volumeChanged(qreal);
     void muteChanged(bool);
     void deviceFeaturesChanged();

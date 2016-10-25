@@ -4,7 +4,7 @@
 #
 #-------------------------------------------------
 # Qt4 need QDesktopServices
-QT = core gui
+QT = core gui sql
 
 TARGET = common
 TEMPLATE = lib
@@ -55,9 +55,5 @@ macx:!ios {
     OBJECTIVE_SOURCES += ScreenSaver.cpp
     LIBS += -framework CoreServices #-framework ScreenSaver
 }
-
-!contains(QMAKE_HOST.os, Windows):include($$PROJECTROOT/deploy.pri)
-
-target.path = $$[QT_INSTALL_BINS]
-!contains(QMAKE_HOST.os, Windows):INSTALLS += target
-
+# don't install. was set in libcommon.pri
+INSTALLS =

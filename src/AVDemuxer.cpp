@@ -1,5 +1,5 @@
 /******************************************************************************
-    QtAV:  Media play library based on Qt and FFmpeg
+    QtAV:  Multimedia framework based on Qt and FFmpeg
     Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
 *   This file is part of QtAV
@@ -18,7 +18,6 @@
     License along with this library; if not, write to the Free Software
     Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 ******************************************************************************/
-
 #include "QtAV/AVDemuxer.h"
 #include "QtAV/MediaIO.h"
 #include "QtAV/private/AVCompat.h"
@@ -35,7 +34,6 @@ typedef QTime QElapsedTimer;
 
 namespace QtAV {
 static const char kFileScheme[] = "file:";
-extern QString getLocalPath(const QString& fullPath);
 
 class AVDemuxer::InterruptHandler : public AVIOInterruptCB
 {
@@ -162,7 +160,7 @@ public:
             if (handler->mAction == Open) {
                 ec = AVError::OpenTimedout;
             } else if (handler->mAction == FindStreamInfo) {
-                ec = AVError::FindStreamInfoTimedout;
+                ec = AVError::ParseStreamTimedOut;
             } else if (handler->mAction == Read) {
                 ec = AVError::ReadTimedout;
             }
@@ -254,18 +252,21 @@ public:
                 || file.startsWith(QLatin1String("udp:"))
                 || file.startsWith(QLatin1String("gopher:"))
                 )) {
-            network = true; //iformat.flags: AVFMT_NOFILE
+            network = true;
         }
     }
     bool checkSeekable() {
+        bool s = false;
         if (!format_ctx)
-            return false;
+            return s;
+        // io.seekable: byte seeking
         if (input)
-            return input->isSeekable();
+            s |= input->isSeekable();
         if (format_ctx->pb)
-            return format_ctx->pb->seekable;
-        // avio context null. not sure the correct way to detect seekable
-        return format_ctx->iformat->read_seek || format_ctx->iformat->read_seek2;
+            s |= !!format_ctx->pb->seekable;
+        // format.read_seek: time seeking. For example, seeking on hls stream steps: find segment, read packet in segment and drop until desired pts got
+        s |= format_ctx->iformat->read_seek || format_ctx->iformat->read_seek2;
+        return s;
     }
     // set wanted_xx_stream. call openCodecs() to read new stream frames
     // stream < 0 is choose best
@@ -314,7 +315,7 @@ public:
     StreamInfo astream, vstream, sstream;
 
     AVDemuxer::InterruptHandler *interrupt_hanlder;
-    QMutex mutex;
+    QMutex mutex; //TODO: remove if load, read, seek is called in 1 thread
 };
 
 AVDemuxer::AVDemuxer(QObject *parent)
@@ -432,7 +433,6 @@ bool AVDemuxer::readFrame()
         //end of file. FIXME: why no d->eof if replaying by seek(0)?
         // ffplay also check pb && pb->error and exit read thread
         if (ret == AVERROR_EOF
-                // AVFMT_NOFILE(e.g. network streams) stream has no pb
                 || avio_feof(d->format_ctx->pb)) {
             if (!d->eof) {
                 if (getInterruptStatus()) { //eof error if interrupted!
@@ -444,7 +444,7 @@ bool AVDemuxer::readFrame()
 #if 0 // EndOfMedia when demux thread finished
                 d->started = false;
                 setMediaStatus(EndOfMedia);
-                emit finished();
+                Q_EMIT finished();
 #endif
                 qDebug("End of file. erreof=%d feof=%d", ret == AVERROR_EOF, avio_feof(d->format_ctx->pb));
             }
@@ -464,14 +464,15 @@ bool AVDemuxer::readFrame()
     //check whether the 1st frame is alreay got. emit only once
     if (!d->started) {
         d->started = true;
-        emit started();
+        Q_EMIT started();
     }
     if (d->stream != videoStream() && d->stream != audioStream() && d->stream != subtitleStream()) {
         //qWarning("[AVDemuxer] unknown stream index: %d", stream);
         return false;
     }
+    // TODO: v4l2 copy
     d->pkt = Packet::fromAVPacket(&packet, av_q2d(d->format_ctx->streams[d->stream]->time_base));
-    av_free_packet(&packet); //important!
+    av_packet_unref(&packet); //important!
     d->eof = false;
     if (d->pkt.pts > qreal(duration())/1000.0) {
         d->max_pts = d->pkt.pts;
@@ -535,7 +536,7 @@ bool AVDemuxer::seek(qint64 pos)
     if (!isLoaded())
         return false;
     //duration: unit is us (10^-6 s, AV_TIME_BASE)
-    qint64 upos = pos*1000LL;
+    qint64 upos = pos*1000LL; // TODO: av_rescale
     if (upos > startTimeUs() + durationUs() || pos < 0LL) {
         if (pos >= 0LL && d->input && d->input->isSeekable() && d->input->isVariableSize()) {
             qDebug("Seek for variable size hack. %lld %.2f. valid range [%lld, %lld]", upos, double(upos)/double(durationUs()), startTimeUs(), startTimeUs()+durationUs());
@@ -632,11 +633,6 @@ MediaIO* AVDemuxer::mediaIO() const
     return d->input;
 }
 
-MediaIO* AVDemuxer::input() const
-{
-    return d->input;
-}
-
 bool AVDemuxer::setMedia(const QString &fileName)
 {
     if (d->input) {
@@ -649,7 +645,7 @@ bool AVDemuxer::setMedia(const QString &fileName)
     if (d->file.startsWith(QLatin1String("mms:")))
         d->file.insert(3, QLatin1Char('h'));
     else if (d->file.startsWith(QLatin1String(kFileScheme)))
-        d->file = getLocalPath(d->file);
+        d->file = Internal::Path::toLocal(d->file);
     int colon = d->file.indexOf(QLatin1Char(':'));
     if (colon == 1) {
 #ifdef Q_OS_WINRT
@@ -737,7 +733,7 @@ bool AVDemuxer::load()
         setMediaStatus(NoMedia);
         return false;
     }
-    QMutexLocker lock(&d->mutex);
+    QMutexLocker lock(&d->mutex); // TODO: load in AVDemuxThread and remove all locks
     Q_UNUSED(lock);
     setMediaStatus(LoadingMedia);
     d->checkNetwork();
@@ -812,7 +808,7 @@ bool AVDemuxer::load()
 
     if (ret < 0) {
         setMediaStatus(InvalidMedia);
-        AVError::ErrorCode ec(AVError::FindStreamInfoError);
+        AVError::ErrorCode ec(AVError::ParseStreamError);
         QString msg(tr("failed to find stream info"));
         handleError(ret, &ec, msg);
         qWarning() << "Can't find stream info: " << msg;
@@ -834,12 +830,7 @@ bool AVDemuxer::load()
     d->seekable = d->checkSeekable();
     if (was_seekable != d->seekable)
         Q_EMIT seekableChanged();
-    qDebug("avfmtctx.flag: %d", d->format_ctx->flags);
-    qDebug("AVFMT_NOTIMESTAMPS: %d, AVFMT_TS_DISCONT: %d, AVFMT_NO_BYTE_SEEK:%d"
-           , d->format_ctx->flags&AVFMT_NOTIMESTAMPS
-           , d->format_ctx->flags&AVFMT_TS_DISCONT
-           , d->format_ctx->flags&AVFMT_NO_BYTE_SEEK
-           );
+    qDebug("avfmtctx.flags: %d, iformat.flags", d->format_ctx->flags, d->format_ctx->iformat->flags);
     if (getInterruptStatus() < 0) {
         QString msg;
         qDebug("AVERROR_EXIT: %d", AVERROR_EXIT);
@@ -857,7 +848,7 @@ bool AVDemuxer::unload()
     /*
     if (d->seekable) {
         d->seekable = false; //
-        emit seekableChanged();
+        Q_EMIT seekableChanged();
     }
     */
     d->network = false;
@@ -877,7 +868,7 @@ bool AVDemuxer::unload()
         // no delete. may be used in next load
         if (d->input)
             d->input->release();
-        emit unloaded();
+        Q_EMIT unloaded();
     }
     return true;
 }
@@ -950,12 +941,12 @@ QString AVDemuxer::formatLongName() const
 // convert to s using AV_TIME_BASE then *1000?
 qint64 AVDemuxer::startTime() const
 {
-    return startTimeUs()/1000LL;
+    return startTimeUs()/1000LL; //TODO: av_rescale
 }
 
 qint64 AVDemuxer::duration() const
 {
-    return durationUs()/1000LL; //time base: AV_TIME_BASE
+    return durationUs()/1000LL; //time base: AV_TIME_BASE TODO: av_rescale
 }
 
 //AVFrameContext use AV_TIME_BASE as time base. AVStream use their own timebase
@@ -1148,7 +1139,7 @@ void AVDemuxer::setMediaStatus(MediaStatus status)
 
     d->media_status = status;
 
-    emit mediaStatusChanged(d->media_status);
+    Q_EMIT mediaStatusChanged(d->media_status);
 }
 
 void AVDemuxer::Private::applyOptionsForDict()
@@ -1207,7 +1198,7 @@ void AVDemuxer::handleError(int averr, AVError::ErrorCode *errorCode, QString &m
         // insufficient buffering or other interruptions
         if (getInterruptStatus() < 0) {
             setMediaStatus(StalledMedia);
-            emit userInterrupted();
+            Q_EMIT userInterrupted();
             err_msg += QStringLiteral(" [%1]").arg(tr("interrupted by user"));
         } else {
             // FIXME: if not interupt on timeout and ffmpeg exits, still LoadingMedia
@@ -1233,7 +1224,7 @@ void AVDemuxer::handleError(int averr, AVError::ErrorCode *errorCode, QString &m
             ec = AVError::NetworkError;
     }
     AVError err(ec, err_msg, averr);
-    emit error(err);
+    Q_EMIT error(err);
     *errorCode = ec;
 }
 

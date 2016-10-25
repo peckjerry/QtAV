@@ -1,6 +1,6 @@
 /******************************************************************************
     mkapi dynamic load code generation for capi template
-    Copyright (C) 2015 Wang Bin <wbsecg1@gmail.com>
+    Copyright (C) 2015-2016 Wang Bin <wbsecg1@gmail.com>
     https://github.com/wang-bin/mkapi
     https://github.com/wang-bin/capi
 
@@ -22,6 +22,8 @@
 #ifndef EGL_API_H
 #define EGL_API_H
 
+// winrt: must define CAPI_LINK_EGL
+
 // no need to include the C header if only functions declared there
 #ifndef CAPI_LINK_EGL
 namespace egl {
@@ -41,6 +43,7 @@ namespace egl {
 #ifndef CAPI_LINK_EGL
 using namespace capi; // original header is in namespace capi, types are changed
 #endif // CAPI_LINK_EGL
+namespace capi { bool loaded();} // For link or NS style. Or load test for class style. api.loaded for class style.
 class api_dll;
 class api
 {
@@ -98,6 +101,8 @@ public:
     EGLBoolean eglDestroySync(EGLDisplay dpy, EGLSync sync);
     EGLint eglClientWaitSync(EGLDisplay dpy, EGLSync sync, EGLint flags, EGLTime timeout);
     EGLBoolean eglGetSyncAttrib(EGLDisplay dpy, EGLSync sync, EGLint attribute, EGLAttrib * value);
+    EGLImage eglCreateImage(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer, const EGLAttrib * attrib_list);
+    EGLBoolean eglDestroyImage(EGLDisplay dpy, EGLImage image);
     EGLDisplay eglGetPlatformDisplay(EGLenum platform, void * native_display, const EGLAttrib * attrib_list);
     EGLSurface eglCreatePlatformWindowSurface(EGLDisplay dpy, EGLConfig config, void * native_window, const EGLAttrib * attrib_list);
     EGLSurface eglCreatePlatformPixmapSurface(EGLDisplay dpy, EGLConfig config, void * native_pixmap, const EGLAttrib * attrib_list);
@@ -108,8 +113,8 @@ public:
 };
 } //namespace egl
 
-#ifndef EGL_CAPI_BUILD
-#ifdef EGL_CAPI_NS
+#ifndef EGL_CAPI_BUILD // avoid ambiguous in egl_api.cpp
+#if defined(EGL_CAPI_NS) && !defined(CAPI_LINK_EGL)
 using namespace egl::capi;
 #else
 using namespace egl;

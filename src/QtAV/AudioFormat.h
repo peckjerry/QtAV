@@ -1,6 +1,6 @@
 /******************************************************************************
     QtAV:  Media play library based on Qt and FFmpeg
-    Copyright (C) 2012-2015 Wang Bin <wbsecg1@gmail.com>
+    Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
 *   This file is part of QtAV
 
@@ -22,12 +22,13 @@
 #ifndef QTAV_AUDIOFORMAT_H
 #define QTAV_AUDIOFORMAT_H
 
-#include <QtCore/QMetaType>
 #include <QtCore/QSharedDataPointer>
 #include <QtCore/QString>
 #include <QtAV/QtAV_Global.h>
 
+QT_BEGIN_NAMESPACE
 class QDebug;
+QT_END_NAMESPACE
 namespace QtAV {
 
 class AudioFormatPrivate;
@@ -68,15 +69,19 @@ public:
         ChannelLayout_Unsupported //ok. now it's not complete
     };
     //typedef qint64 ChannelLayout; //currently use latest FFmpeg's
+    // TODO: constexpr
+    friend int RawSampleSize(SampleFormat fmt) { return fmt & ((1<<(kSize+1)) - 1); }
+    friend bool IsFloat(SampleFormat fmt) { return !!(fmt & kFloat);}
+    friend bool IsPlanar(SampleFormat format) { return !!(format & kPlanar);}
+    friend bool IsUnsigned(SampleFormat format) {return !!(format & kUnsigned);}
+    friend SampleFormat ToPlanar(SampleFormat fmt) { return IsPlanar(fmt) ? fmt : SampleFormat((int)fmt|kPlanar);}
+    friend SampleFormat ToPacked(SampleFormat fmt) { return IsPlanar(fmt) ? SampleFormat((int)fmt^kPlanar) : fmt;}
 
     static ChannelLayout channelLayoutFromFFmpeg(qint64 clff);
     static qint64 channelLayoutToFFmpeg(ChannelLayout cl);
     static SampleFormat sampleFormatFromFFmpeg(int fffmt);
     static int sampleFormatToFFmpeg(SampleFormat fmt);
-    static bool isPlanar(SampleFormat format);
-    static SampleFormat planarSampleFormat(SampleFormat fmt);
-    static SampleFormat packedSampleFormat(SampleFormat fmt);
-
+    static SampleFormat make(int bytesPerSample, bool isFloat, bool isUnsigned, bool isPlanar);
     AudioFormat();
     AudioFormat(const AudioFormat &other);
     ~AudioFormat();

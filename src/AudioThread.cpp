@@ -1,5 +1,5 @@
 /******************************************************************************
-    QtAV:  Media play library based on Qt and FFmpeg
+    QtAV:  Multimedia framework based on Qt and FFmpeg
     Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
 *   This file is part of QtAV
@@ -87,13 +87,14 @@ void AudioThread::run()
     int sync_id = 0;
     while (!d.stop) {
         processNextTask();
-        //TODO: why put it at the end of loop then playNextFrame() not work?
-        if (tryPause()) { //DO NOT continue, or playNextFrame() will fail
-            if (d.stop)
-                break; //the queue is empty and may block. should setBlocking(false) wake up cond empty?
-        } else {
-            if (isPaused())
-                continue;
+        if (d.render_pts0 < 0) { // no pause when seeking
+            if (tryPause()) { //DO NOT continue, or stepForward() will fail
+                if (d.stop)
+                    break; //the queue is empty and may block. should setBlocking(false) wake up cond empty?
+            } else {
+                if (isPaused())
+                    continue;
+            }
         }
         if (d.seek_requested) {
             d.seek_requested = false;
@@ -186,7 +187,7 @@ void AudioThread::run()
             continue;
         }
         const bool is_external_clock = d.clock->clockType() == AVClock::ExternalClock;
-        if (is_external_clock) {
+        if (is_external_clock && !pkt.isEOF()) {
             d.delay = dts - d.clock->value();
             /*
              *after seeking forward, a packet may be the old, v packet may be
@@ -293,7 +294,7 @@ void AudioThread::run()
         }
         // reduce here to ensure to decode the rest data in the next loop
         if (!pkt.isEOF())
-            pkt.data = QByteArray::fromRawData(pkt.data.constData() + pkt.data.size() - dec->undecodedSize(), dec->undecodedSize());
+            pkt.skip(pkt.data.size() - dec->undecodedSize());
 #if USE_AUDIO_FRAME
         AudioFrame frame(dec->frame());
         if (!frame)
@@ -311,7 +312,7 @@ void AudioThread::run()
             d.clock->syncEndOnce(sync_id);
             Q_EMIT seekFinished(qint64(frame.timestamp()*1000.0));
             if (has_ao) {
-                ao->reset();
+                ao->clear();
             }
         }
         if (has_ao) {
@@ -331,23 +332,19 @@ void AudioThread::run()
         qreal delay = 0;
         const qreal byte_rate = frame.format().bytesPerSecond();
         qreal pts = frame.timestamp();
+        //qDebug("frame samples: %d @%.3f+%lld", frame.samplesPerChannel()*frame.channelCount(), frame.timestamp(), frame.duration()/1000LL);
         while (decodedSize > 0) {
             if (d.stop) {
                 qDebug("audio thread stop after decode()");
                 break;
             }
-            // TODO: set to format.bytesPerFrame()*1024?
-            const int chunk = qMin(decodedSize, has_ao ? ao->bufferSize() : 1024*4);//int(max_len*byte_rate));
+            const int chunk = qMin(decodedSize, has_ao ? ao->bufferSize() : 512*frame.format().bytesPerFrame());//int(max_len*byte_rate));
             //AudioFormat.bytesForDuration
             const qreal chunk_delay = (qreal)chunk/(qreal)byte_rate;
-            pts += chunk_delay;
-            pkt.pts += chunk_delay; // packet not fully decoded, use new pts in the next decoding
-            pkt.dts += chunk_delay;
             if (has_ao && ao->isOpen()) {
                 QByteArray decodedChunk = QByteArray::fromRawData(decoded.constData() + decodedPos, chunk);
                 //qDebug("ao.timestamp: %.3f, pts: %.3f, pktpts: %.3f", ao->timestamp(), pts, pkt.pts);
-
-                ao->play(decodedChunk, pkt.pts); //FIXME: why frame.timestamp() is wrong? i.e. Packet.asAVPacket()->pts is wrong in decoder
+                ao->play(decodedChunk, pts);
                 if (!is_external_clock && ao->timestamp() > 0) {//TODO: clear ao buffer
                    // const qreal da = qAbs(pts - ao->timestamp());
                    // if (da > 1.0) { // what if frame duration is long?
@@ -367,6 +364,9 @@ void AudioThread::run()
             }
             decodedPos += chunk;
             decodedSize -= chunk;
+            pts += chunk_delay;
+            pkt.pts += chunk_delay; // packet not fully decoded, use new pts in the next decoding
+            pkt.dts += chunk_delay;
         }
         if (has_ao)
             emit frameDelivered();

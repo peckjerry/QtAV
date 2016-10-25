@@ -1,5 +1,5 @@
 /******************************************************************************
-    QtAV:  Media play library based on Qt and FFmpeg
+    QtAV:  Multimedia framework based on Qt and FFmpeg
     Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
 *   This file is part of QtAV
@@ -23,9 +23,9 @@
 #define QAV_DEMUXTHREAD_H
 
 #include <QtCore/QMutex>
+#include <QtCore/QSemaphore>
 #include <QtCore/QThread>
 #include <QtCore/QRunnable>
-#include "QtAV/CommonTypes.h"
 #include "PacketBuffer.h"
 
 namespace QtAV {
@@ -50,6 +50,7 @@ public:
     //AVDemuxer* demuxer
     bool isPaused() const;
     bool isEnd() const;
+    bool atEndOfMedia() const;
     PacketBuffer* buffer();
     void updateBufferState();
     void stop(); //TODO: remove it?
@@ -57,18 +58,20 @@ public:
 
     MediaEndAction mediaEndAction() const;
     void setMediaEndAction(MediaEndAction value);
-
+    bool waitForStarted(int msec = -1);
 Q_SIGNALS:
     void requestClockPause(bool value);
     void mediaStatusChanged(QtAV::MediaStatus);
     void bufferProgressChanged(qreal);
     void seekFinished(qint64 timestamp);
+    void stepFinished();
     void internalSubtitlePacketRead(int index, const QtAV::Packet& packet);
 private slots:
     void seekOnPauseFinished();
     void frameDeliveredOnStepForward();
     void eofDecodedOnStepForward();
     void onAVThreadQuit();
+    void eofDecoded();
 
 protected:
     virtual void run();
@@ -99,6 +102,7 @@ private:
     QWaitCondition cond;
     BlockingQueue<QRunnable*> seek_tasks;
 
+    QSemaphore sem;
     QMutex next_frame_mutex;
     int clock_type; // change happens in different threads(direct connection)
     friend class SeekTask;

@@ -1,8 +1,8 @@
 /******************************************************************************
     VideoRendererTypes: type id and manually id register function
-    Copyright (C) 2015 Wang Bin <wbsecg1@gmail.com>
+    Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
-*   This file is part of QtAV
+*   This file is part of QtAV (from 2015)
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Lesser General Public
@@ -81,7 +81,9 @@ namespace Widgets {
 
 void registerRenderers()
 {
+#if !defined(QT_NO_DEBUG)
     qDebug("registerRenderers...........");
+#endif
     // check whether it is called
     static bool initialized = false;
     if (initialized)
@@ -90,7 +92,7 @@ void registerRenderers()
     // factory.h does not check whether an id is registered
     if (VideoRenderer::name(VideoRendererId_Widget))
         return;
-#if QT_VERSION >= QT_VERSION_CHECK(5, 0, 0)
+#if QT_VERSION >= QT_VERSION_CHECK(5, 4, 0)
 #ifndef QT_NO_OPENGL
     VideoRenderer::Register<OpenGLWidgetRenderer>(VideoRendererId_OpenGLWidget, "OpenGLWidget");
 #endif //QT_NO_OPENGL

@@ -1,5 +1,5 @@
 # qmake library building template pri file
-# Copyright (C) 2011-2015 Wang Bin <wbsecg1@gmail.com>
+# Copyright (C) 2011-2016 Wang Bin <wbsecg1@gmail.com>
 # Shanghai, China.
 #
 # This program is free software; you can redistribute it and/or modify
@@ -119,7 +119,7 @@ DEPENDPATH *= $$PROJECT_SRCPATH
         !CONFIG(plugin) {
             !isEqual(DESTDIR, $$BUILD_DIR/bin): DLLDESTDIR = $$BUILD_DIR/bin #copy shared lib there
         }
-		CONFIG(release, debug|release): !isEmpty(QMAKE_STRIP): QMAKE_POST_LINK = -$$QMAKE_STRIP $$PROJECT_LIBDIR/$$qtSharedLib($$NAME)
+                CONFIG(release, debug|release): !isEmpty(QMAKE_STRIP):!mac_framework: QMAKE_POST_LINK = -$$QMAKE_STRIP $$PROJECT_LIBDIR/$$qtSharedLib($$NAME)
 		#copy from the pro creator creates.
 		symbian {
 			MMP_RULES += EXPORTUNFROZEN

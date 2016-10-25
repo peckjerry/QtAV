@@ -1,8 +1,8 @@
 /******************************************************************************
     QtAV Player Demo:  this file is part of QtAV examples
-    Copyright (C) 2014-2015 Wang Bin <wbsecg1@gmail.com>
+    Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
-*   This file is part of QtAV
+*   This file is part of QtAV (from 2014)
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -21,10 +21,12 @@
 #include "common.h"
 #include <cstdio>
 #include <cstdlib>
+#include <QtCore/QSettings>
 #include <QFileOpenEvent>
 #include <QtCore/QLocale>
 #include <QtCore/QTranslator>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QTextStream>
 #if QT_VERSION < QT_VERSION_CHECK(5, 0, 0)
@@ -33,6 +35,52 @@
 #include <QtCore/QStandardPaths>
 #endif
 #include <QtDebug>
+
+#ifdef Q_OS_WINRT
+#include <wrl.h>
+#include <windows.foundation.h>
+#include <windows.storage.pickers.h>
+#include <Windows.ApplicationModel.activation.h>
+#include <qfunctions_winrt.h>
+using namespace Microsoft::WRL;
+using namespace Microsoft::WRL::Wrappers;
+using namespace ABI::Windows::ApplicationModel::Activation;
+using namespace ABI::Windows::Foundation;
+using namespace ABI::Windows::Foundation::Collections;
+using namespace ABI::Windows::Storage;
+using namespace ABI::Windows::Storage::Pickers;
+
+#define COM_LOG_COMPONENT "WinRT"
+#define COM_ENSURE(f, ...) COM_CHECK(f, return __VA_ARGS__;)
+#define COM_WARN(f) COM_CHECK(f)
+#define COM_CHECK(f, ...) \
+    do { \
+        HRESULT hr = f; \
+        if (FAILED(hr)) { \
+            qWarning() << QString::fromLatin1(COM_LOG_COMPONENT " error@%1. " #f ": (0x%2) %3").arg(__LINE__).arg(hr, 0, 16).arg(qt_error_string(hr)); \
+            __VA_ARGS__ \
+        } \
+    } while (0)
+
+QString UrlFromFileArgs(IInspectable *args)
+{
+    ComPtr<IFileActivatedEventArgs> fileArgs;
+    COM_ENSURE(args->QueryInterface(fileArgs.GetAddressOf()), QString());
+    ComPtr<IVectorView<IStorageItem*>> files;
+    COM_ENSURE(fileArgs->get_Files(&files), QString());
+    ComPtr<IStorageItem> item;
+    COM_ENSURE(files->GetAt(0, &item), QString());
+    HString path;
+    COM_ENSURE(item->get_Path(path.GetAddressOf()), QString());
+
+    quint32 pathLen;
+    const wchar_t *pathStr = path.GetRawBuffer(&pathLen);
+    const QString filePath = QString::fromWCharArray(pathStr, pathLen);
+    qDebug() << "file path: " << filePath;
+    item->AddRef(); //ensure we can access it later. TODO: how to release?
+    return QString::fromLatin1("winrt:@%1:%2").arg((qint64)(qptrdiff)item.Get()).arg(filePath);
+}
+#endif
 
 Q_GLOBAL_STATIC(QFile, fileLogger)
 #if QT_VERSION < QT_VERSION_CHECK(5, 0, 0)
@@ -92,13 +140,15 @@ QOptions get_common_options()
             ("height", 450, QLatin1String("height of player"))
             ("fullscreen", QLatin1String("fullscreen"))
             ("decoder", QLatin1String("FFmpeg"), QLatin1String("use a given decoder"))
-            ("decoders,-vd", QLatin1String("cuda;vaapi;vda;dxva;cedarv;ffmpeg"), QLatin1String("decoder name list in priority order seperated by ';'"))
+            ("decoders,-vd", QLatin1String("cuda;vaapi;vda;dxva;cedarv;ffmpeg"), QLatin1String("decoder name list in priority order separated by ';'"))
             ("file,f", QString(), QLatin1String("file or url to play"))
-            ("language", QLatin1String("system"), QLatin1String("language on UI. can be 'system', 'none' and locale name e.g. zh_CN"))
+            ("language", QString(), QLatin1String("language on UI. can be 'system' and locale name e.g. zh_CN"))
             ("log", QString(), QLatin1String("log level. can be 'off', 'fatal', 'critical', 'warning', 'debug', 'all'"))
             ("logfile"
-#if defined(Q_OS_WINRT) || defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
+#if defined(Q_OS_IOS)
              , appDataDir().append(QString::fromLatin1("/log-%1.txt"))
+#elif defined(Q_OS_WINRT) || defined(Q_OS_ANDROID)
+             , QString()
 #else
              , QString::fromLatin1("log-%1.txt")
 #endif
@@ -109,14 +159,19 @@ QOptions get_common_options()
 
 void do_common_options_before_qapp(const QOptions& options)
 {
+#ifdef Q_OS_LINUX
+    QSettings cfg(Config::defaultConfigFile(), QSettings::IniFormat);
+    const bool set_egl = cfg.value("opengl/egl").toBool();
+    //https://bugreports.qt.io/browse/QTBUG-49529
     // it's too late if qApp is created. but why ANGLE is not?
-    if (options.value(QString::fromLatin1("egl")).toBool() || Config::instance().isEGL()) {
+    if (options.value(QString::fromLatin1("egl")).toBool() || set_egl) { //FIXME: Config is constructed too early because it requires qApp
         // only apply to current run. no config change
         qputenv("QT_XCB_GL_INTEGRATION", "xcb_egl");
     } else {
         qputenv("QT_XCB_GL_INTEGRATION", "xcb_glx");
     }
     qDebug() << "QT_XCB_GL_INTEGRATION: " << qgetenv("QT_XCB_GL_INTEGRATION");
+#endif //Q_OS_LINUX
 }
 
 void do_common_options(const QOptions &options, const QString& appName)
@@ -127,12 +182,22 @@ void do_common_options(const QOptions &options, const QString& appName)
     }
     // has no effect if qInstallMessageHandler() called
     //qSetMessagePattern("%{function} @%{line}: %{message}");
+#if !defined(Q_OS_WINRT) && !defined(Q_OS_ANDROID)
     QString app(appName);
     if (app.isEmpty() && qApp)
         app = qApp->applicationName();
     QString logfile(options.option(QString::fromLatin1("logfile")).value().toString().arg(app));
     if (!logfile.isEmpty()) {
-        qDebug("set log file");
+        if (QDir(logfile).isRelative()) {
+            QString log_path(QString::fromLatin1("%1/%2").arg(qApp->applicationDirPath()).arg(logfile));
+            QFile f(log_path);
+            if (!f.open(QIODevice::WriteOnly)) {
+                log_path = QString::fromLatin1("%1/%2").arg(appDataDir()).arg(logfile);
+                qDebug() << "executable dir is not writable. log to " << log_path;
+            }
+            logfile = log_path;
+        }
+        qDebug() << "set log file: " << logfile;
         fileLogger()->setFileName(logfile);
         if (fileLogger()->open(QIODevice::WriteOnly)) {
             qDebug() << "Logger";
@@ -141,6 +206,7 @@ void do_common_options(const QOptions &options, const QString& appName)
             qWarning() << "Failed to open log file '" << fileLogger()->fileName() << "': " << fileLogger()->errorString();
         }
     }
+#endif
     QByteArray level(options.value(QString::fromLatin1("log")).toByteArray());
     if (level.isEmpty())
         level = Config::instance().logLevel().toLatin1();
@@ -150,9 +216,9 @@ void do_common_options(const QOptions &options, const QString& appName)
 
 void load_qm(const QStringList &names, const QString& lang)
 {
-    if (lang.isEmpty() || lang.toLower() == QLatin1String("none"))
-        return;
-    QString l(lang);
+    QString l(Config::instance().language());
+    if (!lang.isEmpty())
+        l = lang;
     if (l.toLower() == QLatin1String("system"))
         l = QLocale::system().name();
     QStringList qms(names);
@@ -256,10 +322,26 @@ AppEventFilter::AppEventFilter(QObject *player, QObject *parent)
 
 bool AppEventFilter::eventFilter(QObject *obj, QEvent *ev)
 {
+    //qDebug() << __FUNCTION__ << " watcher: " << obj << ev;
     if (obj != qApp)
         return false;
     if (ev->type() == QEvent::WinEventAct) {
-        // winrt file open/pick. since qt5.6
+        // winrt file open/pick. since qt5.6.1
+        qDebug("QEvent::WinEventAct");
+#ifdef Q_OS_WINRT
+        class QActivationEvent : public QEvent {
+        public:
+            void* args() const {return d;} //IInspectable*
+        };
+        QActivationEvent *ae = static_cast<QActivationEvent*>(ev);
+        const QString url(UrlFromFileArgs((IInspectable*)ae->args()));
+        if (!url.isEmpty()) {
+            qDebug() << "winrt url: " << url;
+            if (m_player)
+                QMetaObject::invokeMethod(m_player, "play", Q_ARG(QUrl, QUrl(url)));
+        }
+        return true;
+#endif
     }
     if (ev->type() != QEvent::FileOpen)
         return false;

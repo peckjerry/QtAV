@@ -1,8 +1,8 @@
 /******************************************************************************
-    QtAV:  Media play library based on Qt and FFmpeg
-    Copyright (C) 2015 Wang Bin <wbsecg1@gmail.com>
+    QtAV:  Multimedia framework based on Qt and FFmpeg
+    Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
-*   This file is part of QtAV
+*   This file is part of QtAV (from 2015)
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Lesser General Public
@@ -38,6 +38,7 @@ public:
     int buffer_size;
     int buffer_count;
     AudioFormat format;
+    static QStringList defaultPriority();
     /*!
      * \brief AudioOutputBackend
      * Specify supported features by the backend. Use this for new backends.
@@ -49,20 +50,13 @@ public:
     virtual bool close() = 0;
     virtual bool write(const QByteArray& data) = 0; //MUST
     virtual bool play() = 0; //MUST
+    virtual bool flush() { return false;}
+    virtual bool clear() { return false;}
     virtual bool isSupported(const AudioFormat& format) const { return isSupported(format.sampleFormat()) && isSupported(format.channelLayout());}
-    virtual bool isSupported(AudioFormat::SampleFormat) const { return true;}
-    virtual bool isSupported(AudioFormat::ChannelLayout) const { return true;}
-    /*!
-     * \brief preferredSampleFormat
-     * \return the preferred sample format. default is signed16 packed
-     *  If the specified format is not supported, resample to preffered format
-     */
-    virtual AudioFormat::SampleFormat preferredSampleFormat() const { return AudioFormat::SampleFormat_Signed16;}
-    /*!
-     * \brief preferredChannelLayout
-     * \return the preferred channel layout. default is stereo
-     */
-    virtual AudioFormat::ChannelLayout preferredChannelLayout() const { return AudioFormat::ChannelLayout_Stereo;}
+    // FIXME: workaround. planar convertion crash now!
+    virtual bool isSupported(AudioFormat::SampleFormat f) const { return !IsPlanar(f);}
+    // 5, 6, 7 channels may not play
+    virtual bool isSupported(AudioFormat::ChannelLayout cl) const { return int(cl) < int(AudioFormat::ChannelLayout_Unsupported);}
     /*!
      * \brief The BufferControl enum
      * Used to adapt to different audio playback backend. Usually you don't need this in application level development.
@@ -81,6 +75,7 @@ public:
     virtual BufferControl bufferControl() const = 0;
     // called by callback with Callback control
     virtual void onCallback();
+    virtual void acquireNextBuffer() {}
     //default return -1. means not the control
     virtual int getPlayedCount() {return -1;} //PlayedCount
     /*!

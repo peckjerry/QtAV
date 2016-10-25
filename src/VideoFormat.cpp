@@ -1,5 +1,5 @@
 /******************************************************************************
-    QtAV:  Media play library based on Qt and FFmpeg
+    QtAV:  Multimedia framework based on Qt and FFmpeg
     Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
 *   This file is part of QtAV
@@ -36,10 +36,13 @@ extern "C" {
 #else
 #define PIXFMT_NE(B, L) VideoFormat::Format_##L
 #endif
-
+// ffmpeg3.0 151aa2e/ libav>11 2268db2
+#if AV_MODULE_CHECK(LIBAVUTIL, 55, 0, 0, 0, 100)
+#define DESC_VAL(X) (X)
+#else
+#define DESC_VAL(X) (X##_minus1 + 1)
+#endif
 namespace QtAV {
-
-// TODO: default ctor, dtor, copy ctor required by implicit sharing?
 class VideoFormatPrivate : public QSharedData
 {
 public:
@@ -104,10 +107,6 @@ public:
     }
 
     void init() {
-        // FIXME: hack for invalid ffmpeg formats
-        if (pixfmt == VideoFormat::Format_VYUY) {
-            pixfmt_ff = QTAV_PIX_FMT_C(UYVY422);
-        }
         // TODO: what if other formats not supported by ffmpeg? give attributes in QtAV?
         if (pixfmt_ff == QTAV_PIX_FMT_C(NONE)) {
             qWarning("Invalid pixel format");
@@ -152,18 +151,19 @@ private:
         //TODO: call later when bpp need
         bpp = 0;
         bpp_pad = 0;
-        bpc = pixdesc->comp[0].depth_minus1+1;
+        //libavutil55: depth, step, offset
+        bpc = DESC_VAL(pixdesc->comp[0].depth);
         const int log2_pixels = pixdesc->log2_chroma_w + pixdesc->log2_chroma_h;
         int steps[4];
         memset(steps, 0, sizeof(steps));
         for (int c = 0; c < pixdesc->nb_components; c++) {
             const AVComponentDescriptor *comp = &pixdesc->comp[c];
             int s = c == 1 || c == 2 ? 0 : log2_pixels; //?
-            bpps[comp->plane] += (comp->depth_minus1 + 1);
-            steps[comp->plane] = (comp->step_minus1 + 1) << s;
+            bpps[comp->plane] += DESC_VAL(comp->depth);
+            steps[comp->plane] = DESC_VAL(comp->step) << s;
             channels[comp->plane] += 1;
-            bpp += (comp->depth_minus1 + 1) << s;
-            if (comp->depth_minus1+1 != bpc)
+            bpp += DESC_VAL(comp->depth) << s;
+            if (DESC_VAL(comp->depth) != bpc)
                 bpc = 0;
         }
         for (int i = 0; i < planes; ++i) {
@@ -190,7 +190,7 @@ static const struct {
     { VideoFormat::Format_YUV444P, QTAV_PIX_FMT_C(YUV444P) },   ///< planar YUV 4:4:4, 24bpp, (1 Cr & Cb sample per 1x1 Y samples)
     { VideoFormat::Format_YUV410P, QTAV_PIX_FMT_C(YUV410P) },   ///< planar YUV 4:1:0,  9bpp, (1 Cr & Cb sample per 4x4 Y samples)
     { VideoFormat::Format_YUV411P, QTAV_PIX_FMT_C(YUV411P) },   ///< planar YUV 4:1:1, 12bpp, (1 Cr & Cb sample per 4x1 Y samples)
-    //QTAV_PIX_FMT_C(GRAY8),     ///<        Y        ,  8bpp
+    { VideoFormat::Format_Y8, QTAV_PIX_FMT_C(GRAY8) },     ///<        Y        ,  8bpp
     //QTAV_PIX_FMT_C(MONOWHITE), ///<        Y        ,  1bpp, 0 is white, 1 is black, in each byte pixels are ordered from the msb to the lsb
     //QTAV_PIX_FMT_C(MONOBLACK), ///<        Y        ,  1bpp, 0 is black, 1 is white, in each byte pixels are ordered from the msb to the lsb
     //QTAV_PIX_FMT_C(PAL8),      ///< 8 bit with PIX_FMT_RGB32 palette
@@ -214,7 +214,7 @@ static const struct {
     { VideoFormat::Format_ABGR32, QTAV_PIX_FMT_C(ABGR) },      ///< packed ABGR 8:8:8:8, 32bpp, ABGRABGR...
     { VideoFormat::Format_BGRA32, QTAV_PIX_FMT_C(BGRA) },      ///< packed BGRA 8:8:8:8, 32bpp, BGRABGRA...
     //QTAV_PIX_FMT_C(GRAY16BE),  ///<        Y        , 16bpp, big-endian
-    //QTAV_PIX_FMT_C(GRAY16LE),  ///<        Y        , 16bpp, little-endian
+    { VideoFormat::Format_Y16, QTAV_PIX_FMT_C(GRAY16LE) },  ///<        Y        , 16bpp, little-endian
     //QTAV_PIX_FMT_C(YUV440P),   ///< planar YUV 4:4:0 (1 Cr & Cb sample per 1x2 Y samples)
     //QTAV_PIX_FMT_C(YUVJ440P),  ///< planar YUV 4:4:0 full scale (JPEG), deprecated in favor of PIX_FMT_YUV440P and setting color_range
     //QTAV_PIX_FMT_C(YUVA420P),  ///< planar YUV 4:2:0, 20bpp, (1 Cr & Cb sample per 2x2 Y & A samples)
@@ -370,6 +370,14 @@ static const struct {
     { VideoFormat::Format_RGBA64, QTAV_PIX_FMT_C(RGBA64) },
     { VideoFormat::Format_BGRA64, QTAV_PIX_FMT_C(BGRA64) },
 #endif //QTAV_USE_FFMPEG(LIBAVUTIL)
+    { VideoFormat::Format_VYUY, QTAV_PIX_FMT_C(UYVY422) }, // FIXME: hack for invalid ffmpeg formats
+
+    { VideoFormat::Format_VYU, QTAV_PIX_FMT_C(RGB32) },
+#ifdef AV_PIX_FMT_XYZ12
+    { VideoFormat::Format_XYZ12, QTAV_PIX_FMT_C(XYZ12) },
+    { VideoFormat::Format_XYZ12LE, QTAV_PIX_FMT_C(XYZ12LE) },
+    { VideoFormat::Format_XYZ12BE, QTAV_PIX_FMT_C(XYZ12BE) },
+#endif
     { VideoFormat::Format_Invalid, QTAV_PIX_FMT_C(NONE) },
 };
 
@@ -714,7 +722,12 @@ bool VideoFormat::isPlanar() const
 
 bool VideoFormat::isRGB() const
 {
-    return (d->flags() & AV_PIX_FMT_FLAG_RGB) == AV_PIX_FMT_FLAG_RGB;
+    return (d->flags() & AV_PIX_FMT_FLAG_RGB) == AV_PIX_FMT_FLAG_RGB && d->pixfmt != Format_VYU;
+}
+
+bool VideoFormat::isXYZ() const
+{
+    return d->pixfmt == Format_XYZ12 || d->pixfmt == Format_XYZ12LE || d->pixfmt == Format_XYZ12BE;
 }
 
 bool VideoFormat::hasAlpha() const
@@ -774,7 +787,6 @@ QDebug operator<<(QDebug dbg, VideoFormat::PixelFormat pixFmt)
     return dbg.space();
 }
 #endif
-
 
 namespace {
     class VideoFormatPrivateRegisterMetaTypes

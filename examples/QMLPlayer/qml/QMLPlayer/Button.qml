@@ -28,11 +28,13 @@ Rectangle {
     property color bgColor: "#555555"
     property color bgColorSelected: "#ee6666dd"
     property color textColor: "white"
-    readonly property alias hovered: mouseArea.containsMouse
+    property bool hovered: false //mouseArea.containsMouse
+    readonly property alias pressed: mouseArea.pressed
     signal clicked()
+    signal pressAndHold()
 
     opacity: 0.7
-    color: checked ? bgColorSelected : mouseArea.pressed ? Qt.lighter(bgColorSelected) : bgColor
+    color: checked ? bgColorSelected : mouseArea.pressed ? Qt.darker(bgColor) : bgColor
     border.color: Qt.lighter(color)
 
     Text {
@@ -63,6 +65,13 @@ Rectangle {
                 root.checked = !root.checked
             root.clicked()
         }
+        onHoveredChanged: {
+            //console.log("button.hover mouseX: " + mouseX)
+            if (mouseX > 65535) //qt5.6 touch screen release finger becomes very large e.g. 0x7fffffff
+                return
+            hovered = mouseArea.containsMouse
+        }
+        onPressAndHold: root.pressAndHold()
     }
     states: [
         State {

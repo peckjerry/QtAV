@@ -19,7 +19,7 @@ Rectangle {
     property string mediaSource
     property int duration: 0
     property real volume: 1
-    property alias mute: volBtn.checked
+    property bool mute: false
     property bool hiding: false
     property int previewHeight: preview.height
     signal seek(int ms)
@@ -31,6 +31,7 @@ Rectangle {
     signal showInfo
     signal showHelp
     signal openFile
+    signal openUrl
 
     function setPlayingProgress(value) {
         playState = "play"
@@ -327,7 +328,7 @@ Rectangle {
         /*
         Button {
             id: backwardBtn
-            anchors.right: playBtn.left
+            anchors.right: stopBtn.left
             anchors.verticalCenter: playBtn.verticalCenter
             bgColor: "transparent"
             bgColorSelected: "transparent"
@@ -352,7 +353,8 @@ Rectangle {
                 //player.stop()
                 stop()
             }
-        }/*
+        }
+        /*
         Button {
             id: forwardBtn
             anchors.left: playBtn.right
@@ -376,8 +378,8 @@ Rectangle {
             checked: false
             bgColor: "transparent"
             bgColorSelected: "transparent"
-            width: Utils.scaled(25)
-            height: Utils.scaled(25)
+            width: Utils.scaled(30)
+            height: Utils.scaled(30)
             icon: Utils.resurl("theme/default/fullscreen.svg")
             iconChecked: Utils.resurl("theme/default/fullscreen.svg")
             visible: true
@@ -396,13 +398,30 @@ Rectangle {
             checked: false
             bgColor: "transparent"
             bgColorSelected: "transparent"
-            width: Utils.scaled(25)
-            height: Utils.scaled(25)
+            width: Utils.scaled(30)
+            height: Utils.scaled(30)
             icon: Utils.resurl("theme/default/volume.svg")
             iconChecked: Utils.resurl("theme/default/mute.svg")
+            onClicked: {
+                if (!isTouchScreen) {
+                    root.mute = checked
+                    return
+                }
+                volBar.visible = !volBar.visible
+                checked = root.mute
+            }
+            onPressAndHold: { //for qt5.6 mobile
+                if (!isTouchScreen)
+                    return
+                root.mute = !root.mute
+                checked = root.mute
+            }
             onHoveredChanged: {
                 volBar.anchors.bottom = parent.top
-                volBar.anchors.bottomMargin = -(y + 2)//height/2)
+                if (isTouchScreen)
+                    volBar.anchors.bottomMargin = 0 //ensure grip does not cover volBtn
+                else
+                    volBar.anchors.bottomMargin = -(y + 2)//height/2)
                 volBar.x = parent.volBarPos - volBar.width/2
             }
         }
@@ -410,34 +429,36 @@ Rectangle {
             anchors.right: parent.right
             anchors.rightMargin: Utils.scaled(50)
             anchors.verticalCenter: parent.verticalCenter
+            /*
             Button {
                 id: infoBtn
                 bgColor: "transparent"
                 bgColorSelected: "transparent"
-                width: Utils.scaled(25)
-                height: Utils.scaled(25)
+                width: Utils.scaled(30)
+                height: Utils.scaled(30)
                 icon: Utils.resurl("theme/default/info.svg")
                 visible: true
                 onClicked: showInfo()
-            }
+            }*/
             Button {
                 id: openFileBtn
                 bgColor: "transparent"
                 bgColorSelected: "transparent"
-                width: Utils.scaled(25)
-                height: Utils.scaled(25)
+                width: Utils.scaled(30)
+                height: Utils.scaled(30)
                 icon: Utils.resurl("theme/default/open.svg")
                 onClicked: openFile()
-            }
+                onPressAndHold: openUrl()
+            } /*
             Button {
                 id: helpBtn
                 bgColor: "transparent"
                 bgColorSelected: "transparent"
-                width: Utils.scaled(25)
-                height: Utils.scaled(25)
+                width: Utils.scaled(30)
+                height: Utils.scaled(30)
                 icon: Utils.resurl("theme/default/help.svg")
                 onClicked: showHelp()
-            }
+            }*/
         }
     }
 

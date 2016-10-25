@@ -1,8 +1,8 @@
 /******************************************************************************
-    QtAV:  Media play library based on Qt and FFmpeg
-    Copyright (C) 2013-2016 Wang Bin <wbsecg1@gmail.com>
+    QtAV:  Multimedia framework based on Qt and FFmpeg
+    Copyright (C) 2012-2016 Wang Bin <wbsecg1@gmail.com>
 
-*   This file is part of QtAV
+*   This file is part of QtAV (from 2013)
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Lesser General Public
@@ -25,9 +25,10 @@
 #include <QtCore/QObject>
 #include <QtCore/QStringList> //5.0
 #include <QtQml/QQmlParserStatus>
+#include <QtQml/QQmlListProperty>
 #include <QmlAV/MediaMetaData.h>
+#include <QmlAV/QuickFilter.h>
 #include <QtAV/AVError.h>
-#include <QtAV/CommonTypes.h>
 #include <QtAV/VideoCapture.h>
 
 namespace QtAV {
@@ -63,6 +64,9 @@ class QmlAVPlayer : public QObject, public QQmlParserStatus
     Q_ENUMS(Error)
     Q_ENUMS(ChannelLayout)
     // not supported by QtMultimedia
+    Q_ENUMS(PositionValue)
+    Q_PROPERTY(int startPosition READ startPosition WRITE setStartPosition NOTIFY startPositionChanged)
+    Q_PROPERTY(int stopPosition READ stopPosition WRITE setStopPosition NOTIFY stopPositionChanged)
     Q_PROPERTY(bool fastSeek READ isFastSeek WRITE setFastSeek NOTIFY fastSeekChanged)
     Q_PROPERTY(int timeout READ timeout WRITE setTimeout NOTIFY timeoutChanged)
     Q_PROPERTY(bool abortOnTimeout READ abortOnTimeout WRITE setAbortOnTimeout NOTIFY abortOnTimeoutChanged)
@@ -70,6 +74,7 @@ class QmlAVPlayer : public QObject, public QQmlParserStatus
     Q_PROPERTY(QStringList videoCodecs READ videoCodecs)
     Q_PROPERTY(QStringList videoCodecPriority READ videoCodecPriority WRITE setVideoCodecPriority NOTIFY videoCodecPriorityChanged)
     Q_PROPERTY(QVariantMap videoCodecOptions READ videoCodecOptions WRITE setVideoCodecOptions NOTIFY videoCodecOptionsChanged)
+    Q_PROPERTY(QVariantMap avFormatOptions READ avFormatOptions WRITE setAVFormatOptions NOTIFY avFormatOptionsChanged)
     Q_PROPERTY(bool useWallclockAsTimestamps READ useWallclockAsTimestamps WRITE setWallclockAsTimestamps NOTIFY useWallclockAsTimestampsChanged)
     Q_PROPERTY(QtAV::VideoCapture *videoCapture READ videoCapture CONSTANT)
     Q_PROPERTY(int audioTrack READ audioTrack WRITE setAudioTrack NOTIFY audioTrackChanged)
@@ -79,8 +84,16 @@ class QmlAVPlayer : public QObject, public QQmlParserStatus
     Q_PROPERTY(QVariantList internalSubtitleTracks READ internalSubtitleTracks NOTIFY internalSubtitleTracksChanged)
     // internal subtitle, e.g. mkv embedded subtitles
     Q_PROPERTY(int internalSubtitleTrack READ internalSubtitleTrack WRITE setInternalSubtitleTrack NOTIFY internalSubtitleTrackChanged)
+
+    Q_PROPERTY(QQmlListProperty<QuickAudioFilter> audioFilters READ audioFilters)
+    Q_PROPERTY(QQmlListProperty<QuickVideoFilter> videoFilters READ videoFilters)
+    // TODO: startPosition/stopPosition
+    Q_PROPERTY(QStringList audioBackends READ audioBackends WRITE setAudioBackends NOTIFY audioBackendsChanged)
+    Q_PROPERTY(QStringList supportedAudioBackends READ supportedAudioBackends)
 public:
     enum Loop { Infinite = -1 };
+    // use (1<<31)-1
+    enum PositionValue { PositionMax = int(~0)^(1<<(sizeof(int)*8-1))};
     enum PlaybackState {
         StoppedState,
         PlayingState,
@@ -124,9 +137,13 @@ public:
     bool hasVideo() const;
 
     QUrl source() const;
+    /*!
+     * \brief setSource
+     * If url is changed and auto load is true, current playback will stop.
+     */
     void setSource(const QUrl& url);
 
-    // 0,1: play once. Loop.Infinite: forever.
+    // 0,1: play once. MediaPlayer.Infinite: forever.
     // >1: play loopCount() - 1 times. different from Qt
     int loopCount() const;
     void setLoopCount(int c);
@@ -140,6 +157,15 @@ public:
     int duration() const;
     int position() const;
     bool isSeekable() const;
+
+    int startPosition() const;
+    void setStartPosition(int value);
+    int stopPosition() const;
+    /*!
+     * \brief setStopPosition
+     * You can use MediaPlayer.PositionMax to play until the end of stream.
+     */
+    void setStopPosition(int value);
     bool isFastSeek() const;
     void setFastSeek(bool value);
 
@@ -171,6 +197,8 @@ public:
     void setVideoCodecPriority(const QStringList& p);
     QVariantMap videoCodecOptions() const;
     void setVideoCodecOptions(const QVariantMap& value);
+    QVariantMap avFormatOptions() const;
+    void setAVFormatOptions(const QVariantMap& value);
 
     bool useWallclockAsTimestamps() const;
     void setWallclockAsTimestamps(bool use_wallclock_as_timestamps);
@@ -206,6 +234,14 @@ public:
     int internalSubtitleTrack() const;
     void setInternalSubtitleTrack(int value);
     QVariantList internalSubtitleTracks() const;
+
+    QQmlListProperty<QuickAudioFilter> audioFilters();
+    QQmlListProperty<QuickVideoFilter> videoFilters();
+
+    QStringList supportedAudioBackends() const;
+    QStringList audioBackends() const;
+    void setAudioBackends(const QStringList& value);
+
 public Q_SLOTS:
     void play();
     void pause();
@@ -234,12 +270,15 @@ Q_SIGNALS:
     void paused();
     void stopped();
     void playing();
+    void startPositionChanged();
+    void stopPositionChanged();
     void seekableChanged();
     void seekFinished(); //WARNING: position() now is not the seek finished video timestamp
     void fastSeekChanged();
     void bufferProgressChanged();
     void videoCodecPriorityChanged();
     void videoCodecOptionsChanged();
+    void avFormatOptionsChanged();
     void useWallclockAsTimestampsChanged();
     void channelLayoutChanged();
     void timeoutChanged();
@@ -255,7 +294,7 @@ Q_SIGNALS:
     void error(Error error, const QString &errorString);
     void statusChanged();
     void mediaObjectChanged();
-
+    void audioBackendsChanged();
 private Q_SLOTS:
     // connect to signals from player
     void _q_error(const QtAV::AVError& e);
@@ -269,6 +308,15 @@ private Q_SLOTS:
     void applyChannelLayout();
 
 private:
+    static void af_append(QQmlListProperty<QuickAudioFilter> *property, QuickAudioFilter *value);
+    static int af_count(QQmlListProperty<QuickAudioFilter> *property);
+    static QuickAudioFilter *af_at(QQmlListProperty<QuickAudioFilter> *property, int index);
+    static void af_clear(QQmlListProperty<QuickAudioFilter> *property);
+    static void vf_append(QQmlListProperty<QuickVideoFilter> *property, QuickVideoFilter *value);
+    static int vf_count(QQmlListProperty<QuickVideoFilter> *property);
+    static QuickVideoFilter *vf_at(QQmlListProperty<QuickVideoFilter> *property, int index);
+    static void vf_clear(QQmlListProperty<QuickVideoFilter> *property);
+
     Q_DISABLE_COPY(QmlAVPlayer)
 
     bool mUseWallclockAsTimestamps;
@@ -280,6 +328,7 @@ private:
     bool m_fastSeek;
     bool m_loading;
     int mLoopCount;
+    int mStart, mStop;
     qreal mPlaybackRate;
     qreal mVolume;
     PlaybackState mPlaybackState;
@@ -297,6 +346,11 @@ private:
 
     QScopedPointer<MediaMetaData> m_metaData;
     QVariantMap vcodec_opt;
+    QVariantMap avfmt_opt;
+
+    QList<QuickAudioFilter*> m_afilters;
+    QList<QuickVideoFilter*> m_vfilters;
+    QStringList m_ao;
 };
 
 #endif // QTAV_QML_AVPLAYER_H
